@@ -1,1 +1,1 @@
-# deploy-to-argo-cd
+# Deploy To Argo CD Action

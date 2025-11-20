@@ -1,0 +1,137 @@
+name: "Deploy To Argo CD Action"
+description: "Update Kubernetes deployment manifests with a Docker image digest and sync via ArgoCD."
+author: "OncoKB Team"
+branding:
+  icon: "cloud"
+  color: "blue"
+
+inputs:
+  image-repo:
+    description: "Docker image repository, e.g. oncokb/oncokb"
+    required: true
+
+  image-tag:
+    description: "Docker image tag to deploy (caller should default this to latest if none selected)"
+    required: true
+
+  k8s-repo:
+    description: "GitHub repo that stores the k8s manifests (e.g. knowledgesystems/knowledgesystems-k8s-deployment)"
+    required: false
+    default: "knowledgesystems/knowledgesystems-k8s-deployment"
+
+  k8s-repo-token:
+    description: "Personal access token or repo token with push rights to the k8s repo"
+    required: true
+
+  deployment-file-path:
+    description: "Path to directory containing deployment YAMLs"
+    required: true
+
+  deployment-file-names:
+    description: "Space-separated list of deployment YAML filenames"
+    required: true
+
+  git-user-name:
+    description: "Git user.name for commits"
+    required: false
+    default: "OncoKB Deploy Action"
+
+  git-user-email:
+    description: "Git user.email for commits"
+    required: false
+    default: "oncokb-deploy-action@github.com"
+
+  target-branch:
+    description: "Branch in k8s repo to push to"
+    required: false
+    default: "master"
+
+  argocd-server:
+    description: "ArgoCD server hostname"
+    required: true
+
+  argocd-app:
+    description: "ArgoCD application name"
+    required: true
+
+  argocd-resource-options:
+    description: "ArgoCD resource options for app sync (e.g. --resource apps:Deployment:ns/name)"
+    required: true
+
+  argocd-username:
+    description: "ArgoCD username"
+    required: true
+
+  argocd-password:
+    description: "ArgoCD password"
+    required: true
+
+runs:
+  using: "composite"
+  env:
+    ARGOCD_CLI_VER: "2.13.3"
+  steps:
+    - name: Pull image and compute digest
+      shell: bash
+      run: |
+        set -euo pipefail
+        DOCKER_IMAGE="${{ inputs.image-repo }}:${{ inputs.image-tag }}"
+        echo "Using image: $DOCKER_IMAGE"
+        docker pull "$DOCKER_IMAGE"
+        DOCKER_SHA=$(docker inspect --format="{{index .RepoDigests 0}}" "$DOCKER_IMAGE")
+        echo "DOCKER_SHA=$DOCKER_SHA"
+        echo "DOCKER_SHA=$DOCKER_SHA" >> "$GITHUB_ENV"
+
+    - name: Checkout K8s Repo
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.k8s-repo }}
+        token: ${{ inputs.k8s-repo-token }}
+
+    - name: Update Deployment Files
+      shell: bash
+      run: |
+        set -euo pipefail
+        DEPLOYMENT_FILE_PATH="${{ inputs.deployment-file-path }}"
+        DEPLOYMENT_FILE_NAMES="${{ inputs.deployment-file-names }}"
+
+        for FILE in $DEPLOYMENT_FILE_NAMES; do
+          FULL_PATH="$DEPLOYMENT_FILE_PATH/$FILE"
+          echo "Updating image in $FULL_PATH to $DOCKER_SHA"
+          sed -i "s|image:.*|image: $DOCKER_SHA|" "$FULL_PATH"
+        done
+
+    - name: Commit changes
+      shell: bash
+      run: |
+        set -euo pipefail
+        git config --global user.email "${{ inputs.git-user-email }}"
+        git config --global user.name "${{ inputs.git-user-name }}"
+
+        if ! git diff --quiet; then
+          git add -A
+          git commit -m "Update deployment to $DOCKER_SHA"
+        else
+          echo "No changes to commit."
+        fi
+
+    - name: Push changes
+      uses: ad-m/github-push-action@master
+      with:
+        github_token: ${{ inputs.k8s-repo-token }}
+        repository: ${{ inputs.k8s-repo }}
+        branch: ${{ inputs.target-branch }}
+
+    - name: Setup ArgoCD
+      uses: clowdhaus/argo-cd-action/@main
+      with:
+        version: ${{ env.ARGOCD_CLI_VER }}
+        command: login ${{ inputs.argocd-server }}
+        options: --username ${{ inputs.argocd-username }} --password ${{ inputs.argocd-password }}
+
+    - name: Sync ArgoCD app
+      uses: clowdhaus/argo-cd-action/@main
+      with:
+        version: ${{ env.ARGOCD_CLI_VER }}
+        command: app sync ${{ inputs.argocd-app }}
+        options: ${{ inputs.argocd-resource-options }}
