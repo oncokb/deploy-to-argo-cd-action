@@ -128,13 +128,13 @@ runs:
     - name: Setup ArgoCD
       uses: clowdhaus/argo-cd-action/@main
       with:
-        version: ${{ env.ARGOCD_CLI_VER }}
+        version: ${{ inputs.argocd-cli-version }}
         command: login ${{ inputs.argocd-server }}
         options: --username ${{ inputs.argocd-username }} --password ${{ inputs.argocd-password }}
 
     - name: Sync ArgoCD app
       uses: clowdhaus/argo-cd-action/@main
       with:
-        version: ${{ env.ARGOCD_CLI_VER }}
+        version: ${{ inputs.argocd-cli-version }}
         command: app sync ${{ inputs.argocd-app }}
         options: ${{ inputs.argocd-resource-options }}
